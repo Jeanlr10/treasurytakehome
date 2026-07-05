@@ -1,0 +1,1347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Label Verifier</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #1F3864;
+    --ink-dark: #16294a;
+    --bg: #FAFAF7;
+    --card: #FFFFFF;
+    --border: #E2E0D8;
+    --text: #2B2B2B;
+    --text-muted: #6B7280;
+    --pass: #2E7D46;
+    --pass-bg: #EAF5EC;
+    --fail: #B3261E;
+    --fail-bg: #FBEAE9;
+    --focus: #8AA9D6;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  }
+
+  header {
+    background: var(--ink);
+    color: white;
+    padding: 28px 20px;
+    text-align: center;
+  }
+
+  header h1 {
+    margin: 0 0 4px;
+    font-size: clamp(22px, 4vw, 30px);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  header p {
+    margin: 0;
+    color: #C9D5E8;
+    font-size: 15px;
+  }
+
+  main {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 28px 20px 80px;
+  }
+
+  .narrow-col {
+    max-width: 640px;
+    margin: 0 auto;
+  }
+
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 28px;
+    margin-bottom: 24px;
+  }
+
+  .card h2 {
+    margin-top: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  /* --- Mode tabs --- */
+  .tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+
+  .tab-btn {
+    flex: 1;
+    padding: 12px 10px;
+    font-size: 14px;
+    font-weight: 600;
+    font-family: inherit;
+    color: var(--text-muted);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .tab-btn:hover {
+    background: #F2F2EE;
+  }
+
+  .tab-btn.active {
+    color: white;
+    background: var(--ink);
+    border-color: var(--ink);
+  }
+
+  .tab-btn:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .pdf-icon {
+    display: block;
+    font-size: 15px;
+    color: var(--text);
+  }
+
+  /* --- Image upload --- */
+  .dropzone {
+    border: 2px dashed var(--border);
+    border-radius: 10px;
+    padding: 28px 20px;
+    text-align: center;
+    cursor: pointer;
+    background: #FCFCFA;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .dropzone:hover, .dropzone.dragover {
+    border-color: var(--ink);
+    background: #F2F5FA;
+  }
+
+  .dropzone:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  .dropzone p {
+    margin: 4px 0 0;
+    color: var(--text-muted);
+    font-size: 14px;
+  }
+
+  .dropzone strong {
+    display: block;
+    font-size: 15px;
+    color: var(--text);
+  }
+
+  .dropzone input[type="file"] {
+    display: none;
+  }
+
+  .preview {
+    margin-top: 14px;
+    text-align: center;
+  }
+
+  .preview img {
+    max-width: 100%;
+    max-height: 260px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+
+  .preview button {
+    display: block;
+    margin: 10px auto 0;
+    background: none;
+    border: none;
+    color: var(--ink);
+    text-decoration: underline;
+    cursor: pointer;
+    font-size: 14px;
+    font-family: inherit;
+    padding: 4px 8px;
+  }
+
+  /* --- Form fields --- */
+  .field {
+    margin-bottom: 18px;
+  }
+
+  .field label {
+    display: block;
+    font-weight: 600;
+    font-size: 14px;
+    margin-bottom: 6px;
+  }
+
+  .field .optional {
+    font-weight: 400;
+    color: var(--text-muted);
+  }
+
+  .field input[type="text"] {
+    width: 100%;
+    padding: 12px 14px;
+    font-size: 16px;
+    font-family: inherit;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: white;
+    color: var(--text);
+  }
+
+  .field input[type="text"]:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 1px;
+    border-color: var(--ink);
+  }
+
+  .field .example {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  button.primary {
+    width: 100%;
+    padding: 16px;
+    font-size: 17px;
+    font-weight: 600;
+    font-family: inherit;
+    color: white;
+    background: var(--ink);
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  button.primary:hover:not(:disabled) {
+    background: var(--ink-dark);
+  }
+
+  button.primary:focus-visible {
+    outline: 3px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  button.primary:disabled {
+    background: #A7B4C7;
+    cursor: not-allowed;
+  }
+
+  /* --- Status / loading --- */
+  #status {
+    text-align: center;
+    padding: 14px;
+    font-size: 15px;
+    color: var(--text-muted);
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 18px;
+    height: 18px;
+    border: 3px solid var(--border);
+    border-top-color: var(--ink);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: middle;
+    margin-right: 8px;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* --- Results --- */
+  #results { display: none; }
+
+  .stamp-wrap {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+
+  .stamp {
+    display: inline-block;
+    padding: 14px 32px;
+    border: 5px double var(--pass);
+    border-radius: 8px;
+    color: var(--pass);
+    font-weight: 700;
+    font-size: 22px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    transform: rotate(-4deg);
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .stamp.fail {
+    border-color: var(--fail);
+    color: var(--fail);
+  }
+
+  .field-result {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .field-result:last-child { border-bottom: none; }
+
+  .field-icon {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 15px;
+    color: white;
+    margin-top: 2px;
+  }
+
+  .field-icon.pass { background: var(--pass); }
+  .field-icon.fail { background: var(--fail); }
+
+  .field-info { flex: 1; min-width: 0; }
+
+  .field-name {
+    font-weight: 600;
+    font-size: 15px;
+  }
+
+  .field-detail {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  .field-score {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+  }
+
+  .meta-row {
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-top: 18px;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  button.secondary {
+    display: block;
+    margin: 20px auto 0;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 10px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 14px;
+  }
+
+  button.secondary:hover {
+    background: #F2F2EE;
+  }
+
+  /* --- Errors --- */
+  .error-box {
+    display: none;
+    background: var(--fail-bg);
+    border: 1px solid var(--fail);
+    color: var(--fail);
+    padding: 14px 16px;
+    border-radius: 8px;
+    font-size: 14px;
+    margin-bottom: 18px;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0,0,0,0);
+    white-space: nowrap; border: 0;
+  }
+
+  /* --- Results layout: carousel beside fields on wide screens, stacked on narrow --- */
+  #results-wide-wrap { max-width: 900px; margin: 0 auto; }
+
+  .results-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  @media (min-width: 760px) {
+    .results-layout { flex-direction: row; align-items: flex-start; }
+    .results-carousel-col { width: 300px; flex-shrink: 0; position: sticky; top: 20px; }
+    .results-fields-col { flex: 1; min-width: 0; }
+  }
+
+  /* --- Label image carousel --- */
+  .carousel {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: #FCFCFA;
+  }
+
+  .carousel-viewport {
+    position: relative;
+    width: 100%;
+    height: 320px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #F2F2EE;
+  }
+
+  .carousel-viewport img {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+  }
+
+  .carousel-arrow {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    background: rgba(255,255,255,0.9);
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .carousel-arrow:hover { background: white; }
+  .carousel-arrow.prev { left: 8px; }
+  .carousel-arrow.next { right: 8px; }
+
+  .carousel-caption {
+    text-align: center;
+    padding: 10px 12px 6px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .carousel-dots {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 12px 12px;
+  }
+
+  .carousel-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--border);
+    border: none;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .carousel-dot.active { background: var(--ink); }
+
+  /* --- Expected value shown per field, regardless of pass/fail --- */
+  .field-expected {
+    font-size: 13px;
+    color: var(--text);
+    margin-top: 4px;
+    padding: 6px 10px;
+    background: #F7F7F3;
+    border-radius: 6px;
+    word-break: break-word;
+  }
+
+  .field-expected .label {
+    color: var(--text-muted);
+    font-weight: 600;
+    margin-right: 4px;
+  }
+
+  /* --- Detected text panel --- */
+  .detected-text-panel {
+    margin-top: 20px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+
+  .detected-text-panel summary {
+    cursor: pointer;
+    padding: 12px 14px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--ink);
+    list-style: none;
+  }
+
+  .detected-text-panel summary::-webkit-details-marker { display: none; }
+
+  .detected-text-panel summary::before {
+    content: "▸ ";
+    display: inline-block;
+    transition: transform 0.15s;
+  }
+
+  .detected-text-panel[open] summary::before {
+    transform: rotate(90deg);
+  }
+
+  .detected-text-list {
+    padding: 0 16px 14px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.7;
+    border-top: 1px solid var(--border);
+    margin-top: -1px;
+    padding-top: 10px;
+  }
+
+  /* --- Multi-file list preview (bulk PDF upload) --- */
+  .pdf-file-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    text-align: left;
+    max-height: 180px;
+    overflow-y: auto;
+  }
+
+  .pdf-file-list li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    font-size: 14px;
+    color: var(--text);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .pdf-file-list li:last-child { border-bottom: none; }
+
+  .pdf-file-list .file-icon { flex-shrink: 0; }
+  .pdf-file-list .file-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* --- Batch results (bulk PDF upload) --- */
+  #batch-results { display: none; }
+
+  .batch-summary {
+    text-align: center;
+    font-size: 15px;
+    margin-bottom: 20px;
+    color: var(--text);
+  }
+
+  .batch-summary strong { font-family: 'IBM Plex Mono', monospace; }
+
+  .batch-item {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+
+  .batch-item-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px;
+    cursor: pointer;
+    background: #FCFCFA;
+  }
+
+  .batch-item-header:hover { background: #F2F2EE; }
+
+  .batch-item-icon {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 13px;
+    color: white;
+  }
+
+  .batch-item-icon.pass { background: var(--pass); }
+  .batch-item-icon.fail { background: var(--fail); }
+  .batch-item-icon.error { background: var(--text-muted); }
+
+  .batch-item-name {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .batch-item-status {
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .batch-item-detail {
+    padding: 14px;
+    border-top: 1px solid var(--border);
+    display: none;
+  }
+
+  .batch-item.expanded .batch-item-detail { display: block; }
+
+  .batch-item-error-msg {
+    font-size: 14px;
+    color: var(--fail);
+  }
+
+  .batch-item-carousel {
+    max-width: 280px;
+    margin: 0 auto 18px;
+  }
+
+  .batch-item-carousel .carousel-viewport {
+    height: 220px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Label Verifier</h1>
+  <p>Check a label against the application — from a photo or a COLA PDF</p>
+</header>
+
+<main>
+  <div class="narrow-col">
+  <div class="tabs" role="tablist" aria-label="How to check a label">
+    <button type="button" class="tab-btn active" id="tab-pdf" role="tab" aria-selected="true" aria-controls="pdf-mode">
+      COLA PDF
+    </button>
+    <button type="button" class="tab-btn" id="tab-photo" role="tab" aria-selected="false" aria-controls="photo-mode">
+      Photo + application details
+    </button>
+  </div>
+
+  <form id="photo-form" class="card" novalidate style="display:none;">
+    <div id="photo-mode">
+    <h2>1. Label photo</h2>
+
+    <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose a label photo to upload">
+      <div id="dropzone-empty">
+        <strong>Click to choose a photo, or drag one here</strong>
+        <p>JPG or PNG</p>
+      </div>
+      <div id="preview" class="preview" style="display:none;">
+        <img id="preview-img" alt="Selected label photo preview">
+        <button type="button" id="remove-photo">Choose a different photo</button>
+      </div>
+      <input type="file" id="image-input" accept="image/png, image/jpeg">
+    </div>
+
+    <h2 style="margin-top:28px;">2. What the application says</h2>
+
+    <div class="field">
+      <label for="brand_name">Brand name</label>
+      <input type="text" id="brand_name" name="brand_name" required autocomplete="off">
+      <div class="example">Example: Old Tom Distillery</div>
+    </div>
+
+    <div class="field">
+      <label for="class_type">Class / type</label>
+      <input type="text" id="class_type" name="class_type" required autocomplete="off">
+      <div class="example">Example: Kentucky Straight Bourbon Whiskey</div>
+    </div>
+
+    <div class="field">
+      <label for="alcohol_content">Alcohol content</label>
+      <input type="text" id="alcohol_content" name="alcohol_content" required autocomplete="off">
+      <div class="example">Example: 45% Alc./Vol. (90 Proof)</div>
+    </div>
+
+    <div class="field">
+      <label for="net_contents">Net contents</label>
+      <input type="text" id="net_contents" name="net_contents" required autocomplete="off">
+      <div class="example">Example: 750 mL</div>
+    </div>
+
+    <div class="field">
+      <label for="bottler">Bottler name and address</label>
+      <input type="text" id="bottler" name="bottler" required autocomplete="off">
+      <div class="example">Example: Old Tom Distillery Co., Bardstown, KY</div>
+    </div>
+
+    <div class="field">
+      <label for="country_of_origin">Country of origin <span class="optional">(imports only)</span></label>
+      <input type="text" id="country_of_origin" name="country_of_origin" autocomplete="off">
+    </div>
+
+    <div class="error-box" id="photo-error-box" role="alert"></div>
+
+    <button type="submit" class="primary" id="photo-submit-btn">Check label</button>
+    </div>
+  </form>
+
+  <form id="pdf-form" class="card" novalidate>
+    <div id="pdf-mode">
+    <h2>COLA PDF</h2>
+    <p style="color:var(--text-muted); font-size:14px; margin-top:-8px;">
+      Search TTB's Public COLA Registry, open a record, and print its detail page to PDF
+      (Ctrl/Cmd+P → Save as PDF). Upload one file, or several at once for bulk checking —
+      the application fields and label photo are both read automatically, no retyping needed.
+    </p>
+
+    <div id="pdf-dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose one or more COLA PDFs to upload">
+      <div id="pdf-dropzone-empty">
+        <strong>Click to choose one or more PDFs, or drag them here</strong>
+        <p>PDF only</p>
+      </div>
+      <div id="pdf-preview" class="preview" style="display:none;">
+        <ul id="pdf-file-list" class="pdf-file-list"></ul>
+        <button type="button" id="remove-pdf">Choose different file(s)</button>
+      </div>
+      <input type="file" id="pdf-input" accept="application/pdf" multiple>
+    </div>
+
+    <div class="error-box" id="pdf-error-box" role="alert" style="margin-top:18px;"></div>
+
+    <button type="submit" class="primary" id="pdf-submit-btn" style="margin-top:18px;">Check label</button>
+    </div>
+  </form>
+
+  <div id="status" role="status" aria-live="polite"></div>
+  </div>
+
+  <div id="results-wide-wrap">
+    <section id="results" aria-live="polite">
+      <div class="results-layout">
+        <div class="results-carousel-col" id="carousel-col" style="display:none;"></div>
+
+        <div class="results-fields-col card">
+          <div class="stamp-wrap">
+            <div class="stamp" id="stamp">Pass</div>
+          </div>
+          <div id="field-list"></div>
+          <div class="meta-row" id="meta-row"></div>
+
+          <details class="detected-text-panel" id="detected-text-panel">
+            <summary>What the system read from the label</summary>
+            <div class="detected-text-list" id="detected-text-list"></div>
+          </details>
+
+          <button type="button" class="secondary" id="check-another">Check another label</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="batch-results" class="card" aria-live="polite">
+      <h2 style="margin-top:0;">Bulk check results</h2>
+      <div class="batch-summary" id="batch-summary"></div>
+      <div id="batch-item-list"></div>
+      <button type="button" class="secondary" id="batch-check-another">Check more labels</button>
+    </section>
+  </div>
+</main>
+
+<script>
+  // Empty string = same-origin relative requests (e.g. fetch("/api/verify")).
+  // This is correct when the frontend is served BY the backend (main.py
+  // mounts this directory as static files) -- the case for any real
+  // deployment. If you're running the frontend on a separate dev server
+  // (e.g. `python -m http.server 8080` per the README's local dev
+  // instructions) while the API runs on a different port, set this to
+  // that API's full origin instead, e.g. "http://127.0.0.1:8000".
+  const API_BASE = "";
+
+  // --- Tab switching ---
+  const tabPhoto = document.getElementById("tab-photo");
+  const tabPdf = document.getElementById("tab-pdf");
+  const photoForm = document.getElementById("photo-form");
+  const pdfForm = document.getElementById("pdf-form");
+
+  function setMode(mode) {
+    const isPhoto = mode === "photo";
+    tabPhoto.classList.toggle("active", isPhoto);
+    tabPdf.classList.toggle("active", !isPhoto);
+    tabPhoto.setAttribute("aria-selected", String(isPhoto));
+    tabPdf.setAttribute("aria-selected", String(!isPhoto));
+    photoForm.style.display = isPhoto ? "block" : "none";
+    pdfForm.style.display = isPhoto ? "none" : "block";
+    resultsEl.style.display = "none";
+    hideError(photoErrorBox);
+    hideError(pdfErrorBox);
+  }
+
+  tabPhoto.addEventListener("click", () => setMode("photo"));
+  tabPdf.addEventListener("click", () => setMode("pdf"));
+
+  // --- Shared elements ---
+  const statusEl = document.getElementById("status");
+  const resultsEl = document.getElementById("results");
+  const stampEl = document.getElementById("stamp");
+  const fieldListEl = document.getElementById("field-list");
+  const metaRowEl = document.getElementById("meta-row");
+  const checkAnotherBtn = document.getElementById("check-another");
+  const photoErrorBox = document.getElementById("photo-error-box");
+  const pdfErrorBox = document.getElementById("pdf-error-box");
+  const carouselCol = document.getElementById("carousel-col");
+  const detectedTextList = document.getElementById("detected-text-list");
+  const detectedTextPanel = document.getElementById("detected-text-panel");
+  const batchResultsEl = document.getElementById("batch-results");
+  const batchSummaryEl = document.getElementById("batch-summary");
+  const batchItemListEl = document.getElementById("batch-item-list");
+  const batchCheckAnotherBtn = document.getElementById("batch-check-another");
+
+  // Builds a self-contained carousel element (its own state via closure,
+  // not shared globals) so it can be instantiated independently multiple
+  // times -- once for the single-result view, and once per item in a
+  // bulk-upload result list, each showing that item's own label image(s).
+  // Returns null if there's nothing to show, so callers can skip
+  // inserting/displaying a container entirely rather than showing an
+  // empty one.
+  function buildCarousel(images) {
+    if (!images || images.length === 0) return null;
+
+    let index = 0;
+    const wrap = document.createElement("div");
+    wrap.className = "carousel";
+
+    const viewport = document.createElement("div");
+    viewport.className = "carousel-viewport";
+
+    const prevBtn = document.createElement("button");
+    prevBtn.type = "button";
+    prevBtn.className = "carousel-arrow prev";
+    prevBtn.setAttribute("aria-label", "Previous image");
+    prevBtn.textContent = "‹";
+
+    const img = document.createElement("img");
+    img.alt = "";
+
+    const nextBtn = document.createElement("button");
+    nextBtn.type = "button";
+    nextBtn.className = "carousel-arrow next";
+    nextBtn.setAttribute("aria-label", "Next image");
+    nextBtn.textContent = "›";
+
+    viewport.appendChild(prevBtn);
+    viewport.appendChild(img);
+    viewport.appendChild(nextBtn);
+
+    const caption = document.createElement("div");
+    caption.className = "carousel-caption";
+
+    const dots = document.createElement("div");
+    dots.className = "carousel-dots";
+
+    wrap.appendChild(viewport);
+    wrap.appendChild(caption);
+    wrap.appendChild(dots);
+
+    const showArrows = images.length > 1;
+    prevBtn.style.display = showArrows ? "flex" : "none";
+    nextBtn.style.display = showArrows ? "flex" : "none";
+
+    const dotEls = [];
+    if (showArrows) {
+      images.forEach((_, i) => {
+        const dot = document.createElement("button");
+        dot.type = "button";
+        dot.className = "carousel-dot" + (i === 0 ? " active" : "");
+        dot.setAttribute("aria-label", `Show image ${i + 1} of ${images.length}`);
+        dot.addEventListener("click", () => show(i));
+        dots.appendChild(dot);
+        dotEls.push(dot);
+      });
+    }
+
+    function show(i) {
+      index = (i + images.length) % images.length;
+      const item = images[index];
+      img.src = item.data_uri;
+      img.alt = item.image_type;
+      caption.textContent = item.image_type;
+      dotEls.forEach((dot, idx) => dot.classList.toggle("active", idx === index));
+    }
+
+    prevBtn.addEventListener("click", () => show(index - 1));
+    nextBtn.addEventListener("click", () => show(index + 1));
+
+    show(0);
+    return wrap;
+  }
+
+  // Renders into the single, shared carousel column used by the
+  // one-label results view (as opposed to buildCarousel() calls made
+  // directly for each row in a bulk-upload result list).
+  function renderCarousel(images) {
+    carouselCol.innerHTML = "";
+    const built = buildCarousel(images);
+    if (!built) {
+      carouselCol.style.display = "none";
+      return;
+    }
+    carouselCol.appendChild(built);
+    carouselCol.style.display = "block";
+  }
+
+  // ============== Photo + application details mode ==============
+  const dropzone = document.getElementById("dropzone");
+  const imageInput = document.getElementById("image-input");
+  const dropzoneEmpty = document.getElementById("dropzone-empty");
+  const preview = document.getElementById("preview");
+  const previewImg = document.getElementById("preview-img");
+  const removePhotoBtn = document.getElementById("remove-photo");
+  const photoSubmitBtn = document.getElementById("photo-submit-btn");
+
+  let selectedFile = null;
+
+  dropzone.addEventListener("click", () => imageInput.click());
+  dropzone.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      imageInput.click();
+    }
+  });
+  dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("dragover"); });
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+  dropzone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("dragover");
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+  });
+  imageInput.addEventListener("change", () => {
+    if (imageInput.files && imageInput.files[0]) setFile(imageInput.files[0]);
+  });
+  removePhotoBtn.addEventListener("click", (e) => { e.stopPropagation(); clearFile(); });
+
+  function setFile(file) {
+    selectedFile = file;
+    previewImg.src = URL.createObjectURL(file);
+    dropzoneEmpty.style.display = "none";
+    preview.style.display = "block";
+  }
+
+  function clearFile() {
+    selectedFile = null;
+    imageInput.value = "";
+    dropzoneEmpty.style.display = "block";
+    preview.style.display = "none";
+  }
+
+  photoForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    hideError(photoErrorBox);
+
+    if (!selectedFile) {
+      showError(photoErrorBox, "Choose a label photo before checking.");
+      return;
+    }
+
+    const requiredFields = ["brand_name", "class_type", "alcohol_content", "net_contents", "bottler"];
+    for (const name of requiredFields) {
+      if (!photoForm.elements[name].value.trim()) {
+        showError(photoErrorBox, "Fill in all the application fields before checking (country of origin is optional).");
+        photoForm.elements[name].focus();
+        return;
+      }
+    }
+
+    const fd = new FormData();
+    fd.append("image", selectedFile);
+    for (const name of requiredFields) {
+      fd.append(name, photoForm.elements[name].value.trim());
+    }
+    const country = photoForm.elements["country_of_origin"].value.trim();
+    if (country) fd.append("country_of_origin", country);
+
+    await submitRequest(`${API_BASE}/api/verify`, fd, photoSubmitBtn, photoErrorBox);
+  });
+
+  // ============== COLA PDF mode ==============
+  const pdfDropzone = document.getElementById("pdf-dropzone");
+  const pdfInput = document.getElementById("pdf-input");
+  const pdfDropzoneEmpty = document.getElementById("pdf-dropzone-empty");
+  const pdfPreview = document.getElementById("pdf-preview");
+  const pdfFileListEl = document.getElementById("pdf-file-list");
+  const removePdfBtn = document.getElementById("remove-pdf");
+  const pdfSubmitBtn = document.getElementById("pdf-submit-btn");
+
+  let selectedPdfs = [];
+
+  pdfDropzone.addEventListener("click", () => pdfInput.click());
+  pdfDropzone.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      pdfInput.click();
+    }
+  });
+  pdfDropzone.addEventListener("dragover", (e) => { e.preventDefault(); pdfDropzone.classList.add("dragover"); });
+  pdfDropzone.addEventListener("dragleave", () => pdfDropzone.classList.remove("dragover"));
+  pdfDropzone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    pdfDropzone.classList.remove("dragover");
+    if (e.dataTransfer.files && e.dataTransfer.files.length) setPdfFiles([...e.dataTransfer.files]);
+  });
+  pdfInput.addEventListener("change", () => {
+    if (pdfInput.files && pdfInput.files.length) setPdfFiles([...pdfInput.files]);
+  });
+  removePdfBtn.addEventListener("click", (e) => { e.stopPropagation(); clearPdfFiles(); });
+
+  function setPdfFiles(files) {
+    selectedPdfs = files;
+    pdfFileListEl.innerHTML = "";
+    for (const file of files) {
+      const li = document.createElement("li");
+      const icon = document.createElement("span");
+      icon.className = "file-icon";
+      icon.textContent = "📄";
+      icon.setAttribute("aria-hidden", "true");
+      const name = document.createElement("span");
+      name.className = "file-name";
+      name.textContent = file.name;
+      li.appendChild(icon);
+      li.appendChild(name);
+      pdfFileListEl.appendChild(li);
+    }
+    pdfDropzoneEmpty.style.display = "none";
+    pdfPreview.style.display = "block";
+  }
+
+  function clearPdfFiles() {
+    selectedPdfs = [];
+    pdfInput.value = "";
+    pdfFileListEl.innerHTML = "";
+    pdfDropzoneEmpty.style.display = "block";
+    pdfPreview.style.display = "none";
+  }
+
+  pdfForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    hideError(pdfErrorBox);
+
+    if (selectedPdfs.length === 0) {
+      showError(pdfErrorBox, "Choose one or more COLA PDFs before checking.");
+      return;
+    }
+
+    if (selectedPdfs.length === 1) {
+      const fd = new FormData();
+      fd.append("pdf", selectedPdfs[0]);
+      await submitRequest(`${API_BASE}/api/verify/from-cola-pdf`, fd, pdfSubmitBtn, pdfErrorBox);
+    } else {
+      const fd = new FormData();
+      for (const file of selectedPdfs) fd.append("pdfs", file);
+      await submitBatchRequest(`${API_BASE}/api/verify/batch-from-cola-pdf`, fd, pdfSubmitBtn, pdfErrorBox);
+    }
+  });
+
+  // ============== Shared submit / results / reset ==============
+  async function submitRequest(url, formData, submitBtn, errorBox) {
+    setLoading(true, submitBtn);
+    resultsEl.style.display = "none";
+    batchResultsEl.style.display = "none";
+
+    try {
+      const res = await fetch(url, { method: "POST", body: formData });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showError(errorBox, data.detail ? String(data.detail) : "Something went wrong checking this label. Try again.");
+        setLoading(false, submitBtn);
+        return;
+      }
+
+      renderResults(data);
+      setLoading(false, submitBtn);
+    } catch (err) {
+      showError(errorBox, "Couldn't reach the label checking service. Make sure it's running, then try again.");
+      setLoading(false, submitBtn);
+    }
+  }
+
+  async function submitBatchRequest(url, formData, submitBtn, errorBox) {
+    setLoading(true, submitBtn);
+    resultsEl.style.display = "none";
+    batchResultsEl.style.display = "none";
+
+    try {
+      const res = await fetch(url, { method: "POST", body: formData });
+      const data = await res.json();
+
+      if (!res.ok) {
+        showError(errorBox, data.detail ? String(data.detail) : "Something went wrong checking these labels. Try again.");
+        setLoading(false, submitBtn);
+        return;
+      }
+
+      renderBatchResults(data);
+      setLoading(false, submitBtn);
+    } catch (err) {
+      showError(errorBox, "Couldn't reach the label checking service. Make sure it's running, then try again.");
+      setLoading(false, submitBtn);
+    }
+  }
+
+  function resetAll() {
+    photoForm.reset();
+    clearFile();
+    pdfForm.reset();
+    clearPdfFiles();
+    resultsEl.style.display = "none";
+    batchResultsEl.style.display = "none";
+    hideError(photoErrorBox);
+    hideError(pdfErrorBox);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  checkAnotherBtn.addEventListener("click", resetAll);
+  batchCheckAnotherBtn.addEventListener("click", resetAll);
+
+  function setLoading(isLoading, submitBtn) {
+    photoSubmitBtn.disabled = isLoading;
+    pdfSubmitBtn.disabled = isLoading;
+    if (isLoading) {
+      statusEl.innerHTML = `<span class="spinner" aria-hidden="true"></span>Checking label — usually a few seconds, longer for labels with a lot of small text…`;
+    } else {
+      statusEl.innerHTML = "";
+    }
+  }
+
+  function showError(box, message) {
+    box.textContent = message;
+    box.style.display = "block";
+  }
+
+  function hideError(box) {
+    box.style.display = "none";
+    box.textContent = "";
+  }
+
+  const FIELD_LABELS = {
+    brand_name: "Brand name",
+    class_type: "Class / type",
+    alcohol_content: "Alcohol content",
+    net_contents: "Net contents",
+    bottler: "Bottler name and address",
+    country_of_origin: "Country of origin",
+    government_warning: "Government warning statement",
+    government_warning_size: "Government warning text size",
+    government_warning_absolute_size: "Government warning text size (measured)",
+  };
+
+  const FIELD_FAIL_MESSAGES = {
+    government_warning_size: "Warning text looks noticeably smaller than the rest of the label — check this by eye.",
+    government_warning_absolute_size: "Measured warning text is smaller than the legal minimum for this container size (27 CFR 16.22(a)).",
+  };
+
+  const FIELD_PASS_MESSAGES = {
+    government_warning_size: "Warning text size looks proportional to the rest of the label.",
+    government_warning_absolute_size: "Measured warning text meets the legal minimum size for this container (27 CFR 16.22(a)).",
+  };
+
+  function renderFieldRows(container, fields) {
+    container.innerHTML = "";
+    for (const field of fields) {
+      const row = document.createElement("div");
+      row.className = "field-result";
+
+      const icon = document.createElement("div");
+      icon.className = "field-icon " + (field.matched ? "pass" : "fail");
+      icon.textContent = field.matched ? "✓" : "✕";
+      icon.setAttribute("aria-hidden", "true");
+
+      const info = document.createElement("div");
+      info.className = "field-info";
+
+      const name = document.createElement("div");
+      name.className = "field-name";
+      name.textContent = FIELD_LABELS[field.field_name] || field.field_name;
+
+      const status = document.createElement("div");
+      status.className = "field-detail";
+      status.textContent = field.matched
+        ? (FIELD_PASS_MESSAGES[field.field_name] || "Matches the application.")
+        : (FIELD_FAIL_MESSAGES[field.field_name] || "Doesn't match the application — check this by eye.");
+
+      const score = document.createElement("div");
+      score.className = "field-score";
+      score.textContent = `confidence: ${field.score.toFixed(0)}%`;
+
+      info.appendChild(name);
+      info.appendChild(status);
+
+      // Always show the expected/declared value, whether this field
+      // passed or failed -- lets a reviewer see what was actually
+      // declared/detected without digging into the raw OCR text.
+      if (field.expected_value) {
+        const expected = document.createElement("div");
+        expected.className = "field-expected";
+        const label = document.createElement("span");
+        label.className = "label";
+        label.textContent = "Expected:";
+        expected.appendChild(label);
+        expected.appendChild(document.createTextNode(field.expected_value));
+        info.appendChild(expected);
+      }
+
+      info.appendChild(score);
+      row.appendChild(icon);
+      row.appendChild(info);
+      container.appendChild(row);
+    }
+  }
+
+  function renderResults(data) {
+    stampEl.textContent = data.overall_pass ? "Pass" : "Needs review";
+    stampEl.classList.toggle("fail", !data.overall_pass);
+
+    renderFieldRows(fieldListEl, data.fields);
+
+    const seconds = (data.processing_time_ms / 1000).toFixed(1);
+    metaRowEl.textContent = `Checked in ${seconds}s`;
+
+    renderCarousel(data.label_images);
+
+    const lines = data.detected_text || [];
+    if (lines.length > 0) {
+      detectedTextPanel.style.display = "block";
+      detectedTextList.innerHTML = lines.map(l => {
+        const div = document.createElement("div");
+        div.textContent = l;
+        return div.outerHTML;
+      }).join("");
+    } else {
+      detectedTextPanel.style.display = "none";
+    }
+
+    resultsEl.style.display = "block";
+    resultsEl.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function renderBatchResults(data) {
+    batchSummaryEl.innerHTML =
+      `<strong>${data.succeeded}</strong> processed, <strong>${data.failed}</strong> couldn't be read` +
+      (data.failed > 0 ? " — see below." : ".");
+
+    batchItemListEl.innerHTML = "";
+    for (const item of data.results) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "batch-item";
+
+      const header = document.createElement("div");
+      header.className = "batch-item-header";
+      header.setAttribute("role", "button");
+      header.setAttribute("tabindex", "0");
+
+      const icon = document.createElement("div");
+      const name = document.createElement("div");
+      name.className = "batch-item-name";
+      name.textContent = item.filename;
+
+      const status = document.createElement("div");
+      status.className = "batch-item-status";
+
+      if (item.status === "ok") {
+        const pass = item.result.overall_pass;
+        icon.className = "batch-item-icon " + (pass ? "pass" : "fail");
+        icon.textContent = pass ? "✓" : "✕";
+        status.textContent = pass ? "Pass" : "Needs review";
+      } else {
+        icon.className = "batch-item-icon error";
+        icon.textContent = "!";
+        status.textContent = "Couldn't process";
+      }
+      icon.setAttribute("aria-hidden", "true");
+
+      header.appendChild(icon);
+      header.appendChild(name);
+      header.appendChild(status);
+
+      const detail = document.createElement("div");
+      detail.className = "batch-item-detail";
+
+      if (item.status === "ok") {
+        const carousel = buildCarousel(item.result.label_images);
+        if (carousel) {
+          const carouselWrap = document.createElement("div");
+          carouselWrap.className = "batch-item-carousel";
+          carouselWrap.appendChild(carousel);
+          detail.appendChild(carouselWrap);
+        }
+        const fieldsContainer = document.createElement("div");
+        detail.appendChild(fieldsContainer);
+        renderFieldRows(fieldsContainer, item.result.fields);
+      } else {
+        const errMsg = document.createElement("div");
+        errMsg.className = "batch-item-error-msg";
+        errMsg.textContent = item.error;
+        detail.appendChild(errMsg);
+      }
+
+      const toggle = () => wrapper.classList.toggle("expanded");
+      header.addEventListener("click", toggle);
+      header.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
+      });
+
+      wrapper.appendChild(header);
+      wrapper.appendChild(detail);
+      batchItemListEl.appendChild(wrapper);
+    }
+
+    batchResultsEl.style.display = "block";
+    batchResultsEl.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+</script>
+
+</body>
+</html>
