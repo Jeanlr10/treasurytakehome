@@ -16,7 +16,9 @@ the detailed one.
 - [Real-world validation](#real-world-validation)
 - [Absolute (physical) size requirements](#absolute-physical-size-requirements)
 - [COLA PDF intake](#cola-pdf-intake)
+- [Concurrent OCR for multi-image PDFs — tried, fixed twice, then reverted](#concurrent-ocr-for-multi-image-pdfs--tried-fixed-twice-then-reverted)
 - [Frontend design notes](#frontend-design-notes)
+- [Bulk PDF upload](#bulk-pdf-upload)
 - [Deployment details](#deployment-details)
 - [Known limitations, in full](#known-limitations-in-full)
 
@@ -294,145 +296,102 @@ matcher doesn't specifically model. Both currently correctly get flagged
 for human review rather than silently passed — arguably the right failure
 direction for a compliance tool, but worth knowing about.
 
-## Concurrent OCR for multi-image PDFs
+## Concurrent OCR for multi-image PDFs — tried, fixed twice, then reverted
 
 Multi-image COLA PDFs (front/back/neck) originally ran OCR on each image
 sequentially, which adds up: a real 3-image PDF measured ~44s total on a
 CPU-only box, since a text-dense back label alone can take 10-15s (see
 "Frontend design notes" below on why OCR time scales with detected line
 count, not just image size). Since each image is independent, running
-them in parallel is the obvious fix — but this genuinely was not a "just
-add a ThreadPoolExecutor" change.
+them in parallel looked like an obvious fix. The final outcome is that
+it wasn't -- but getting there surfaced three separate real bugs worth
+recording in full, not just the conclusion.
 
-**A naive version of this was tested and found to be a real correctness
-bug, not a theoretical concern.** `ocr_engine.py`'s detector/recognizer
-are cached, shared singletons (`@lru_cache`). Running
-`extract_text()` concurrently across threads, all hitting the same
-shared model instances, produced **cross-contaminated results** —
-confirmed by diffing exact text against a known-correct sequential run:
-the front label's OCR output came back containing text that actually
-belonged to the back label, and the back label's output was a scrambled
-interleaving of both labels' real content. Reproduced consistently
-across repeated trials, not a one-off fluke. For a compliance tool,
-silently attributing one label's text to a different label is a serious
-failure mode, not a minor glitch — this needed to be caught and fixed
-before shipping, not shipped and hoped to be fine.
+**Attempt 1: naive `ThreadPoolExecutor` over the existing shared, cached
+model singletons.** Found to be a real correctness bug, not a
+theoretical concern: concurrent `predict()` calls on the same shared
+`TextDetection`/`TextRecognition` instances produced cross-contaminated
+results, confirmed by diffing exact output against a known-correct
+sequential run -- the front label's OCR output came back containing text
+that actually belonged to the back label, and the back label's output
+was a scrambled interleaving of both. Reproduced consistently across
+repeated trials, not a one-off fluke.
 
-**The fix**: give each concurrent call its own independent
-`TextDetection`/`TextRecognition` instances instead of sharing the
-cached ones (`extract_text_concurrent()` in `ocr_engine.py`). This was
-also measured, not assumed, to have negligible construction overhead —
-PaddleX appears to cache the actual model weights at a lower level, so
-building a new instance is cheap; it's specifically *concurrent
-inference calls on one shared instance* that aren't thread-safe, not
-model loading itself. Verified: byte-identical text output to sequential
-`extract_text()` across repeated trials, at effectively the same
-wall-clock cost as the (broken) shared-instance version — the fix cost
-nothing.
-
-**Real speedup measured in isolation** (unshared CPU, the same
-conditions as an actual dedicated server, not a busy CI box): ~44s
-sequential down to ~15s concurrent on a real 3-image PDF at the balanced
-tier — bounded by the single slowest image (the dense back label), not
-divided evenly by worker count, since the workload is uneven. Through
-the real `/api/verify/from-cola-pdf` endpoint end-to-end: 14.2s wall
-time, with field-match results identical to the very first time this PDF
-was tested (before any of this concurrency work existed) — confirming
-correctness through the full stack, not just the isolated OCR call.
-
-**Honest note on the test suite's timing check**: `test_pipeline.py`'s
-`test_concurrent_ocr_correctness` asserts the text output matches
-sequential exactly (a real correctness gate), but deliberately does
-**not** hard-assert that concurrent is faster — timing comparisons are
-noisy under CPU contention (confirmed directly: in one full-suite run,
-concurrent came back marginally *slower* than sequential, purely from
-sharing the test machine with dozens of other CPU-heavy tests running
-back to back). The speed number is printed for visibility, not gated on,
-since a flaky test that fails under load for reasons unrelated to actual
-correctness is worse than no test at all.
-
-**A second, more serious performance issue was found on real deployment
-hardware, not in any sandbox: thread oversubscription.** After deploying
-the concurrent OCR fix above, a 16-core dedicated server measured
-concurrent processing as *slower* than sequential, not faster --
-diagnosed with real `podman inspect`/`nproc`/`env` output, not guessed.
-Ruled out a container CPU quota first (`NanoCpus`/`CpuQuota`/`CpuPeriod`
-all `0`, i.e. no limit, and the container correctly saw all 16 host
-cores). The actual cause: no `OMP_NUM_THREADS` (or equivalent) was set
-anywhere, so PaddlePaddle's OpenMP-based math kernels defaulted to
-spawning one internal thread per visible core -- *per inference call*.
-With 3 outer Python threads each independently triggering that, a
-16-core box could see up to ~48 OS threads competing for 16 real cores,
-which is worse than useless -- the context-switching/scheduling overhead
-from that many competing threads outweighed any real parallel gain, and
-plausibly outweighed running everything on just one thread. Fixed by
-setting `OMP_NUM_THREADS=1` (`OPENBLAS_NUM_THREADS=1`,
-`MKL_NUM_THREADS=1` alongside it, covering PaddlePaddle's possible
-backends) in the `Dockerfile`, early enough to apply to both the
-build-time model warm-up and runtime serving -- this makes the *outer*
-`ThreadPoolExecutor` the only source of real parallelism, rather than
-fighting an uncontrolled inner one. Not independently re-measured on the
-16-core box after this fix (that verification is on whoever's running
-this deployment to confirm) -- documented here as a real, diagnosed bug
-and its fix, not as a claim that the fix was re-verified to actually
-restore the expected speedup on that specific hardware.
-
-**A third, genuinely serious issue: the fix for the original
-thread-safety bug (constructing a brand-new model instance per call)
-turned out to leak memory, and it was actually crashing the deployed
-container in production before it was caught.** The real-world symptom:
-after processing roughly 7-8 COLA PDFs in a row, the deployed service
-started returning connection failures ("Couldn't reach the label
-checking service") rather than HTTP errors -- consistent with the
-container process itself dying (most likely OOM-killed) and Podman's
-`Restart=always` bringing it back, which would explain why the failures
-weren't permanent but recurred after a similar number of requests each
-time.
-
-Measured, not assumed: constructing a fresh `TextDetection`/
-`TextRecognition` pair on every single call and monitoring RSS across 10
-simulated PDFs (3 real images each, real OCR) showed memory climbing
+**Attempt 2: a fresh model instance constructed on every call**, instead
+of sharing one. Fixed the correctness bug (verified: byte-identical text
+output to sequential, across repeated trials) at what first looked like
+negligible cost -- but this leaked memory in production. The real-world
+symptom: after processing roughly 7-8 real COLA PDFs in a row, the
+deployed service started returning connection failures rather than HTTP
+errors, consistent with the container process itself dying (most likely
+OOM-killed) and Podman's `Restart=always` bringing it back, which
+explained why the failures recurred rather than being permanent.
+Measured, not assumed: constructing a fresh instance pair on every call
+and monitoring RSS across 10 simulated PDFs showed memory climbing
 steadily from a 303MB baseline to 1052MB with no sign of plateauing --
-roughly 20MB of growth per simulated PDF, continuing linearly rather than
-settling. At that rate, a container with something like a 1GB memory
-limit would be expected to get OOM-killed after almost exactly the
-7-8-PDF range being reported in production. Something in PaddleX's
-underlying C++ backend is not fully releasing resources when a
-Python-level `TextDetection`/`TextRecognition` instance is garbage
-collected -- each individual instance's construction cost is cheap (as
-documented in the now-superseded version of this fix), but the total
-memory footprint across *all instances ever constructed over the
-process's lifetime* grows without bound, which only shows up as a real
-problem after enough requests accumulate -- exactly the kind of bug that
-passes every quick correctness/speed check and only surfaces under
-sustained real use.
+something in PaddleX's underlying C++ backend was not fully releasing
+resources when a Python-level instance was garbage collected.
 
-**The fix: a small, fixed-size object pool** (`_get_model_pool()` /
-`_extract_text_pooled()` in `ocr_engine.py`), sized to 4 (front/back/neck
-plus one spare -- real COLA records realistically never exceed this).
-Each `(detector, recognizer)` pair is constructed exactly once, for the
-entire process's lifetime, the first time the pool is needed. Concurrent
-calls borrow a pair for their own exclusive use via a thread-safe
-`queue.Queue` and return it when done, which preserves the property that
-actually matters for the original bug (no two threads ever call
-`predict()` on the same instance at the same time) while adding the
-property that matters for this one (the total number of instances ever
-constructed is fixed and small, not proportional to the number of
-requests served). If a PDF ever has more images than the pool size, the
-extra images simply wait for a free pooled instance rather than spinning
-up a new one -- a deliberate throttle, not a bug.
+**Attempt 3: a small, fixed-size pool of model instances**, created once
+and reused for the process's lifetime, borrowed exclusively per call.
+This fixed both prior bugs at once -- no two threads ever shared an
+instance concurrently (fixing attempt 1's corruption), and the total
+number of instances ever constructed was fixed and small regardless of
+request volume (fixing attempt 2's leak). Verified: text output still
+byte-identical to sequential, and RSS plateaued after the pool's
+one-time construction cost across 25 simulated PDFs (~36MB total drift,
+noise-level) instead of climbing indefinitely.
 
-Re-ran the identical memory measurement with the pool in place, extended
-to 25 simulated PDFs for higher confidence: RSS grew rapidly for the
-first couple of PDFs (the pool's one-time construction cost, expected),
-then plateaued -- first-5-PDF average 1221.6MB vs. last-5-PDF average
-1257.6MB, a ~36MB total drift across 20 additional PDFs (noise-level,
-consistent with normal allocator behavior, not an ongoing leak), a
-dramatically different profile from the unbounded version's steady
-~20MB-per-PDF climb with no plateau in sight. Also reconfirmed text
-output is still byte-identical to sequential `extract_text()` with the
-pooled implementation, so the correctness fix from before was not
-undone in the process of fixing this.
+**Separately, real deployment hardware surfaced a fourth issue: thread
+oversubscription.** A 16-core server measured the (correctness- and
+leak-fixed) concurrent version as *slower* than sequential, not faster.
+Diagnosed with real `podman inspect`/`nproc`/`env` output, not guessed:
+ruled out a container CPU quota first (none configured), then found no
+`OMP_NUM_THREADS` was set anywhere -- PaddlePaddle's OpenMP-based math
+kernels default to spawning one internal thread per visible core *per
+inference call*, so 3 outer Python threads could produce up to ~48 OS
+threads competing for 16 real cores. Fixed by setting
+`OMP_NUM_THREADS=1` (and the OpenBLAS/MKL equivalents) in the
+`Dockerfile`, so the outer thread pool would be the only source of real
+parallelism.
+
+**That fix exposed the actual, final answer: there was no real
+parallelism to gain in the first place.** With `OMP_NUM_THREADS=1` in
+place, a direct on-hardware comparison (the same single image
+processed 3 times, specifically to remove any workload-size difference
+from the comparison) measured sequential at 14.44s vs. concurrent at
+19.87s -- concurrent was **38% slower**, a large, unambiguous margin,
+not noise. The likely explanation: without OpenMP-level parallelism
+inside each call, PaddleX's inference doesn't release Python's GIL
+enough for multiple threads to make real simultaneous progress, so the
+`ThreadPoolExecutor`/pool machinery was pure overhead -- thread
+creation, queue synchronization for borrowing pooled instances -- bought
+for zero actual parallel benefit. This also retroactively explains the
+very first symptom that kicked off this whole investigation ("threading
+somehow made it slower on my machine").
+
+**Decision: reverted to plain sequential processing.** `extract_text()`
+went back to its original signature (no injected model instances);
+`extract_text_concurrent()`, the model pool, and their dedicated tests
+were deleted rather than left in place unused, once the premise
+generating them no longer held. This is not a compromise or a
+regression -- it's simpler code that measurably performs better on real
+hardware than the (correct, non-leaking) concurrent version did. The one
+honest caveat from earlier in this investigation, now resolved rather
+than lingering: the very first "concurrent is faster" measurement in
+this project came from a sandbox with only 1 CPU core, which cannot
+demonstrate real multi-core parallelism at all -- that measurement's
+apparent speedup was never real, and the eventual on-hardware result
+(concurrent is slower) is the one that should be trusted.
+
+**One deliberately not-yet-explored follow-up**: now that processing is
+sequential again (only one inference call ever running at a time), the
+`OMP_NUM_THREADS=1` restriction may no longer be the right call --
+without any outer concurrency to protect against oversubscription,
+letting a single call use multiple cores for its own math kernels could
+plausibly make even the sequential path faster than currently measured.
+Not tested; would need the same rigor as everything above (measured on
+real hardware, not assumed) before changing it.
 
 ## Frontend design notes
 
@@ -569,6 +528,22 @@ one service, one port, no CORS to configure in production.
   don't assume from the Dockerfile source alone that a given build
   actually has the tier you expect, since it's easy to change one
   without rebuilding/redeploying the other.
+
+**Speed vs. accuracy: a deliberate, considered trade-off against a
+stated requirement, not an oversight.** Sarah Chen's interview notes are
+explicit and repeated on this point: "If we can't get results back in
+about 5 seconds, nobody's going to use it. We learned that the hard
+way" -- referring to a prior vendor pilot that took 30-40s/label and
+got abandoned by agents going back to reviewing by eye. Measured, not
+assumed: `fast` tier lands at ~2.5-4s/label, meeting that bar; `balanced`
+(the tier actually deployed) measures ~7s/label, over it; `accurate`
+~7.5s, also over it. `balanced` was chosen anyway for meaningfully better
+recognition accuracy, a real and reasonable trade given the brief's own
+explicit instruction to document trade-offs rather than silently pick
+one direction. Switching back to `fast` is a one-line Dockerfile change
+(`RUN python3 ocr_config.py fast`) plus a rebuild, not a structural
+change -- so this can be revisited per-deployment without touching any
+other code.
 
 **Hosting options considered:**
 - **Hugging Face Spaces (Docker SDK)** — free, no payment, deploys via

@@ -36,7 +36,7 @@ from label_size_requirements import (
 )
 from cola_pdf_parser import parse_cola_pdf
 from cola_label_extractor import extract_all_label_images
-from ocr_engine import OCRLine, extract_text, extract_text_concurrent
+from ocr_engine import OCRLine, extract_text
 from models import LabelSubmission, VerificationResponse
 from pydantic import ValidationError
 import json as _json
@@ -438,135 +438,6 @@ def test_api_endpoints():
           elapsed=t.elapsed)
 
 
-def test_concurrent_ocr_correctness():
-    """
-    extract_text_concurrent() -- parallel OCR across a multi-image COLA
-    PDF's images (front/back/neck), used by the /api/verify/from-cola-pdf
-    endpoint for multi-image records.
-
-    This exists specifically because a naive ThreadPoolExecutor over
-    extract_text() (which uses shared, cached model singletons) was
-    tested and found to be a REAL correctness bug, not a theoretical
-    one: concurrent inference calls on the same shared PaddleOCR
-    instances produced cross-contaminated results across images (e.g.
-    the front label's OCR output coming back containing text that
-    actually belonged to the back label). extract_text_concurrent() gives
-    each concurrent call its own independent model instances instead --
-    this test locks in that the fix actually produces byte-identical
-    text output to the sequential path, so a future change can't
-    silently reintroduce the corruption.
-    """
-    print("\n-- concurrent OCR correctness (extract_text_concurrent) --")
-    group = "concurrent_ocr_correctness"
-
-    fixtures = Path(__file__).resolve().parent / "fixtures"
-    throwback_pdf = fixtures / "real_cola_throwback_3images.pdf"
-
-    parsed = parse_cola_pdf(throwback_pdf)
-    pdf_bytes = throwback_pdf.read_bytes()
-    extracted_images, status = extract_all_label_images(pdf_bytes, parsed.image_dimensions)
-
-    import tempfile
-    img_paths = []
-    for img in extracted_images:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{img.ext}") as tmp:
-            tmp.write(img.image_bytes)
-            img_paths.append(Path(tmp.name))
-
-    with timer() as t:
-        sequential_results = [extract_text(p) for p in img_paths]
-    sequential_texts = [sorted(l.text for l in r) for r in sequential_results]
-
-    with timer() as t2:
-        concurrent_results = extract_text_concurrent(img_paths)
-    concurrent_texts = [sorted(l.text for l in r) for r in concurrent_results]
-
-    check(group, "concurrent output text-identical to sequential, across all 3 images",
-          concurrent_texts == sequential_texts, elapsed=t2.elapsed)
-    # Informational only, not a pass/fail gate -- speed comparisons are
-    # inherently noisy (shared CI/sandbox CPU contention, warm-cache
-    # ordering effects from whatever ran before this test in the same
-    # suite), and the thing that actually matters for safety is the
-    # correctness check above. Manually verified the real speedup this
-    # is meant to provide (3x+) in an isolated, controlled comparison --
-    # see extract_text_concurrent()'s docstring in ocr_engine.py.
-    print(f"  (informational) sequential={t.elapsed*1000:.0f}ms, concurrent={t2.elapsed*1000:.0f}ms")
-
-    for p in img_paths:
-        p.unlink()
-
-
-def test_concurrent_ocr_memory_stable():
-    """
-    Regression test for a real memory leak found and fixed in this
-    project: an earlier version of extract_text_concurrent() constructed
-    a brand-new TextDetection/TextRecognition pair on every call, which
-    leaked memory (something in PaddleX's underlying C++ backend doesn't
-    fully release resources when a Python-level instance is garbage
-    collected). This actually crashed the deployed production container
-    -- after roughly 7-8 real COLA PDFs, the service started refusing
-    connections, consistent with an OOM kill and Podman's Restart=always
-    bringing it back, which is why the failures recurred rather than
-    being permanent.
-
-    The fix was a small, fixed-size model instance pool (_get_model_pool()
-    in ocr_engine.py) -- this test locks in that the fix actually holds:
-    RSS should plateau after the pool's one-time construction cost, not
-    keep climbing per call. Threshold set at 120MB drift across the back
-    half of the run, calibrated against REAL observed noise, not guessed:
-    repeated manual runs measured drift of 14MB, 36MB, and 70MB across
-    otherwise-identical conditions, purely from allocator/GC timing
-    variance -- an initial 50MB threshold produced a false failure from
-    this normal noise. 120MB keeps a wide, safe margin below the actual
-    bug's severity (roughly 20MB of growth PER SINGLE PDF, continuously,
-    with no sign of stopping -- ~180MB+ over this many iterations) while
-    comfortably absorbing the observed noise range.
-    """
-    print("\n-- concurrent OCR memory stability (regression for a real production crash) --")
-    group = "concurrent_ocr_memory_stable"
-
-    import gc
-    import os
-    import tempfile
-
-    import psutil
-
-    fixtures = Path(__file__).resolve().parent / "fixtures"
-    pdf_path = fixtures / "real_cola_throwback_3images.pdf"
-    parsed = parse_cola_pdf(pdf_path)
-    pdf_bytes = pdf_path.read_bytes()
-    extracted_images, _ = extract_all_label_images(pdf_bytes, parsed.image_dimensions)
-
-    img_paths = []
-    for img in extracted_images:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f".{img.ext}") as tmp:
-            tmp.write(img.image_bytes)
-            img_paths.append(Path(tmp.name))
-
-    process = psutil.Process(os.getpid())
-    N = 10  # fewer than the 25 used during manual investigation, to keep the suite's runtime reasonable
-    readings = []
-
-    with timer() as t:
-        for _ in range(N):
-            results = extract_text_concurrent(img_paths)
-            del results
-            gc.collect()
-            readings.append(process.memory_info().rss / 1024 / 1024)
-
-    first_half_avg = sum(readings[:N // 2]) / (N // 2)
-    second_half_avg = sum(readings[N // 2:]) / (N - N // 2)
-    drift = second_half_avg - first_half_avg
-
-    check(group, f"RSS plateaus rather than climbing per call "
-                 f"(first-half avg={first_half_avg:.0f}MB, second-half avg={second_half_avg:.0f}MB, "
-                 f"drift={drift:.0f}MB, threshold=120MB)",
-          drift < 120, elapsed=t.elapsed)
-
-    for p in img_paths:
-        p.unlink()
-
-
 def test_cola_pdf_intake():
     """
     cola_pdf_parser.py + cola_label_extractor.py + the new
@@ -725,8 +596,6 @@ if __name__ == "__main__":
     test_warning_text_size()
     test_absolute_size_requirements()
     test_real_world_cola()
-    test_concurrent_ocr_correctness()
-    test_concurrent_ocr_memory_stable()
     test_cola_pdf_intake()
     test_rotation_handling()
     test_api_endpoints()

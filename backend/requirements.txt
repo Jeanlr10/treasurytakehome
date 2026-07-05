@@ -28,6 +28,3 @@ pymupdf>=1.28  # PDF text/image extraction for cola_pdf_parser.py and cola_label
 
 # --- test suite dependency ---
 httpx>=0.27  # used by FastAPI's TestClient in tests/test_pipeline.py
-psutil>=6.0  # process RSS monitoring in test_concurrent_ocr_memory_stable; already a
-             # transitive dependency of paddleocr, declared explicitly since a test
-             # shouldn't silently rely on an undeclared one

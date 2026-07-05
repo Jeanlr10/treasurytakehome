@@ -105,6 +105,17 @@ download. The OCR tier is set at build time via `RUN python3 ocr_config.py
 picker in this path by design; edit that line and rebuild to change it
 (see "Quick start" above for the tier names and tradeoffs).
 
+**A deliberate, acknowledged trade-off against the stated ~5-second
+target**: Sarah Chen's interview notes are explicit that results need to
+come back in about 5 seconds or the tool won't get used, based on a
+prior vendor pilot that failed for exactly that reason. Measured, not
+assumed: `fast` tier meets that bar (~2.5-4s/label); `balanced` (the
+tier actually deployed here) measures ~7s/label, over it. Chosen anyway
+for meaningfully better recognition accuracy — see `ocr_config.py` for
+the per-tier numbers. This is a real trade-off, not an oversight; `fast`
+is one Dockerfile-line-and-rebuild away if the 5-second target should
+take priority instead (`RUN python3 ocr_config.py fast`).
+
 ```bash
 docker build -t label-verifier .
 docker run -p 7860:7860 label-verifier
@@ -153,11 +164,12 @@ docs/
 - COLA PDF intake parses declared fields and extracts label images
   directly from a TTB application PDF, so a reviewer can skip manual data
   entry — tested against two different real TTB Form 5100.31 revisions.
-  Multi-image records (front/back/neck) are OCR'd concurrently using a
-  small, fixed-size pool of model instances — sized and pooled
-  specifically to avoid two real bugs found and fixed during
-  development (thread-safety corruption and a memory leak, both detailed
-  in the design notes) rather than a naive "just add threads" approach.
+  Multi-image records (front/back/neck) are OCR'd sequentially — a
+  concurrent version was built and measured on real deployment hardware,
+  and concurrency turned out to be 38% *slower*, not faster (likely GIL
+  contention with no real OS-level parallelism to gain from it); reverted
+  once that was confirmed rather than kept for its own sake. Full story,
+  including two other real bugs found along the way, in the design notes.
 - The physical size check computes a real pixels-per-mm scale from a
   PDF's stated label dimensions and checks the warning statement's actual
   measured height in millimeters against the cited CFR minimum — a
@@ -186,6 +198,10 @@ docs/
 
 ## Known limitations
 
+- **Deployed at `balanced` tier (~7s/label), over the stakeholder-stated
+  ~5-second target** (`fast` tier meets it, ~2.5-4s/label) — a
+  deliberate trade for meaningfully better accuracy, not an oversight.
+  See "Deployment" above for the one-line change to revert it.
 - Full 90-degree label rotation and some mixed-orientation labels aren't
   reliably handled yet.
 - Bold-face verification for "GOVERNMENT WARNING" isn't possible from OCR

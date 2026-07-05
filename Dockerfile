@@ -16,17 +16,19 @@ FROM python:3.12-slim
 
 # PaddlePaddle's math kernels (OpenMP-based) default to spawning one
 # internal thread PER VISIBLE CPU CORE for every single inference call,
-# unless told otherwise. extract_text_concurrent() in ocr_engine.py runs
-# multiple inference calls at once across outer Python threads -- without
-# this, each of those outer threads would ALSO try to spawn a full set of
-# inner threads, causing severe oversubscription. Confirmed on real
-# hardware, not assumed: a 16-core box with no thread limit set made
-# concurrent multi-image processing measurably SLOWER than sequential,
-# not faster -- threads fighting each other for cores rather than doing
-# genuine parallel work. Capping inner per-call threading to 1 makes the
-# OUTER thread pool the only source of real parallelism. Set this early
-# (before the model warm-up step below) so build-time and run-time
-# behavior match.
+# unless told otherwise. This was originally set to fix a real
+# oversubscription bug when OCR ran across multiple outer Python threads
+# at once (confirmed on real hardware: a 16-core box with no thread
+# limit set made concurrent multi-image processing measurably SLOWER
+# than sequential -- threads fighting each other for cores). That outer
+# concurrency was later removed entirely (see docs/DESIGN_NOTES.md --
+# it turned out to be a net loss even once oversubscription was fixed,
+# likely GIL contention), so this setting is no longer protecting
+# against multiple outer threads competing for cores. Left in place
+# because removing it hasn't been tested: with no outer concurrency now,
+# letting a single sequential call use multiple cores for its own math
+# kernels COULD be faster than currently measured -- an open, real,
+# not-yet-tested follow-up, not a settled question either way.
 ENV OMP_NUM_THREADS=1
 ENV OPENBLAS_NUM_THREADS=1
 ENV MKL_NUM_THREADS=1

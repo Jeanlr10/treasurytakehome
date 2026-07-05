@@ -61,7 +61,7 @@ from pydantic import ValidationError
 
 from field_matcher import verify_label, select_warning_lines
 from models import ErrorResponse, FieldVerificationResult, LabelImage, LabelSubmission, VerificationResponse
-from ocr_engine import extract_text, extract_text_concurrent
+from ocr_engine import extract_text
 from cola_pdf_parser import parse_cola_pdf
 from cola_label_extractor import extract_all_label_images
 from label_size_requirements import ScaleReference, check_warning_absolute_size, parse_net_contents_ml
@@ -272,15 +272,20 @@ def _process_cola_pdf(tmp_pdf_path: Path, tmp_img_paths: list[Path]) -> Verifica
             "the source PDF manually."
         )
 
-    # OCR each real label image in PARALLEL (front/back/neck), since each
-    # is a physically distinct image and OCR is the dominant per-image
-    # cost. Uses extract_text_concurrent() specifically -- NOT a naive
-    # ThreadPoolExecutor over extract_text() calls, which was tested and
-    # found to corrupt results by sharing model instances across threads
-    # (see extract_text_concurrent()'s docstring in ocr_engine.py for the
-    # measured before/after). Then merge the detected text for general
-    # field matching, where a field could legitimately appear on either
-    # image.
+    # OCR each real label image SEQUENTIALLY (front/back/neck). This was
+    # concurrent for a while -- that whole detour (a real thread-safety
+    # corruption bug, then a real memory leak, then a real thread-
+    # oversubscription bug, each found and fixed in turn) is documented
+    # in docs/DESIGN_NOTES.md. It ended here because the premise itself
+    # turned out to be wrong on real deployment hardware: measured
+    # directly (3x the same image, isolating the comparison from any
+    # workload-size differences), sequential took 14.44s vs. concurrent's
+    # 19.87s -- concurrent was 38% SLOWER, not faster. Once
+    # OMP_NUM_THREADS=1 removed the oversubscription problem, there was
+    # no real OS-level parallelism left for the ThreadPoolExecutor to
+    # exploit (likely GIL contention during PaddleX's inference calls),
+    # so all that remained was pure thread/pool overhead with zero
+    # benefit. Simpler, correct, and faster: this is not a compromise.
     import time
     t0 = time.perf_counter()
 
@@ -292,7 +297,7 @@ def _process_cola_pdf(tmp_pdf_path: Path, tmp_img_paths: list[Path]) -> Verifica
             img_paths.append(Path(tmp.name))
     tmp_img_paths.extend(img_paths)
 
-    all_results = extract_text_concurrent(img_paths)
+    all_results = [extract_text(p) for p in img_paths]
     per_image_lines = list(zip(extracted_images, all_results))
     all_lines = [line for lines in all_results for line in lines]
 

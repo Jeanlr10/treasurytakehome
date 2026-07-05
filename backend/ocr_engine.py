@@ -76,10 +76,9 @@ from __future__ import annotations
 
 import functools
 import math
-import queue
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Union
+from typing import Union
 
 import numpy as np
 import cv2
@@ -204,11 +203,7 @@ def _straighten_crop(img_array: np.ndarray, poly) -> np.ndarray:
     return straightened
 
 
-def extract_text(
-    image_path: Union[str, Path],
-    detector: Optional["TextDetection"] = None,
-    recognizer: Optional["TextRecognition"] = None,
-) -> list[OCRLine]:
+def extract_text(image_path: Union[str, Path]) -> list[OCRLine]:
     """
     Run the full detect -> angle-correct -> recognize pipeline on a label
     image and return all detected text lines.
@@ -220,12 +215,6 @@ def extract_text(
 
     Args:
         image_path: path to a label image (jpg/png).
-        detector, recognizer: optionally inject specific model instances
-            instead of using the shared cached singletons (_get_detector()
-            / _get_recognizer()). Exists specifically for
-            extract_text_concurrent() below -- see its docstring for why
-            the shared singletons are NOT safe to call from multiple
-            threads at once, which independent instances are.
 
     Returns:
         List of OCRLine. Order is not guaranteed to match the original
@@ -234,8 +223,8 @@ def extract_text(
         unordered text blob before matching.
     """
     image_path = str(image_path)
-    detector = detector or _get_detector()
-    recognizer = recognizer or _get_recognizer()
+    detector = _get_detector()
+    recognizer = _get_recognizer()
 
     img = Image.open(image_path).convert("RGB")
     img_array = np.array(img)
@@ -310,104 +299,22 @@ def extract_text(
     return [lines[i] for i in horizontal_idx] + [lines[i] for i in vertical_idx]
 
 
-_MODEL_POOL_SIZE = 4  # covers front/back/neck (+1 headroom); see extract_text_concurrent docstring
-_model_pool: "queue.Queue" = None
-
-
-def _get_model_pool():
-    """
-    Lazily create the fixed-size pool of (detector, recognizer) pairs on
-    first use, then always return the same pool. Each pair is constructed
-    exactly once for the entire process lifetime -- see
-    extract_text_concurrent()'s docstring for why this specific property
-    (bounded total construction count, not just bounded concurrent use)
-    is the part that actually matters.
-    """
-    global _model_pool
-    if _model_pool is None:
-        det_model, rec_model = get_tier_models()
-        pool = queue.Queue()
-        for _ in range(_MODEL_POOL_SIZE):
-            pool.put((
-                TextDetection(model_name=det_model, enable_mkldnn=False),
-                TextRecognition(model_name=rec_model, enable_mkldnn=False),
-            ))
-        _model_pool = pool
-    return _model_pool
-
-
-def _extract_text_pooled(image_path) -> list[OCRLine]:
-    """Borrow a (detector, recognizer) pair from the pool for exclusive use, then return it."""
-    pool = _get_model_pool()
-    detector, recognizer = pool.get()
-    try:
-        return extract_text(image_path, detector=detector, recognizer=recognizer)
-    finally:
-        pool.put((detector, recognizer))
-
-
-def extract_text_concurrent(image_paths: list) -> list[list[OCRLine]]:
-    """
-    Run extract_text() on multiple images IN PARALLEL, for a multi-image
-    COLA PDF (front/back/neck) where each image is independent and OCR is
-    otherwise the dominant cost.
-
-    Uses a small, FIXED pool of model instances (_MODEL_POOL below),
-    created once and reused for the lifetime of the process -- NOT the
-    shared cached singletons (_get_detector()/_get_recognizer()), and
-    NOT a fresh instance constructed per call. Both of those were tried
-    first and both were found to be real bugs, not theoretical concerns:
-
-    1. Sharing the cached singletons across concurrent threads corrupted
-       results -- confirmed by diffing exact output against a known-
-       correct sequential run: the front label's OCR output came back
-       containing text that actually belonged to the back label, and the
-       back label's output was a scrambled interleaving of both.
-       Reproduced consistently across repeated trials.
-
-    2. Constructing a brand-new TextDetection/TextRecognition instance on
-       every call (the first fix attempt) avoided that corruption, but
-       leaked memory -- confirmed by measuring RSS across 10 simulated
-       PDFs of real OCR calls: 303MB baseline climbing steadily to
-       1052MB, not plateauing. At that rate, a container with roughly a
-       1GB memory limit would get OOM-killed after somewhere around 7-8
-       PDFs -- which is the exact real-world symptom this was diagnosing
-       ("Couldn't reach the label checking service" after processing
-       several PDFs in a row, i.e. the container crashed and systemd/
-       Restart=always brought it back). Something in PaddleX's underlying
-       C++ backend isn't fully releasing resources when a Python-level
-       instance is garbage collected -- constructing N instances over
-       time leaks roughly linearly in N, even though each individual
-       instance's construction cost is cheap (see the now-superseded
-       version of this docstring's timing claims, still true for one-time
-       cost, just not for repeated construction over the process
-       lifetime).
-
-    The fix: a small, FIXED-size pool (module-level, created lazily on
-    first use, never grown or shrunk), where each concurrent call BORROWS
-    an instance for exclusive use during its own call and returns it
-    afterward. This keeps both properties that actually matter: no two
-    threads ever call predict() on the same instance at the same time
-    (fixes bug #1), and the total number of instances ever constructed
-    over the process's entire lifetime is bounded and small, regardless
-    of how many requests or PDFs are processed (fixes bug #2). Verified:
-    repeated the same 10-simulated-PDF memory measurement with the pool
-    in place -- RSS plateaued after the first couple of PDFs rather than
-    climbing indefinitely (see test_pipeline.py's
-    test_concurrent_ocr_memory_stable for the automated version of this
-    check).
-
-    If a PDF has more images than _MODEL_POOL_SIZE, the extra images
-    simply wait for a free pooled instance rather than spinning up a new
-    one -- a deliberate, safe throttle, not a bug. Real COLA records
-    realistically have at most 3-4 images (front/back/neck), so this
-    essentially never binds in practice.
-    """
-    from concurrent.futures import ThreadPoolExecutor
-
-    workers = min(len(image_paths), _MODEL_POOL_SIZE)
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        return list(executor.map(_extract_text_pooled, image_paths))
+# A concurrent version of multi-image OCR (extract_text_concurrent(), a
+# fixed-size model instance pool) lived here for a while, built to speed
+# up multi-image COLA PDFs (front/back/neck) by processing images in
+# parallel. Removed after being measured, not assumed, to be a net loss
+# on real deployment hardware: isolating the comparison from any
+# workload-size differences (the same image 3x), sequential measured
+# 14.44s vs. concurrent's 19.87s -- concurrent was 38% SLOWER. Once
+# OMP_NUM_THREADS=1 (set in the Dockerfile to fix a real thread-
+# oversubscription bug) removed the ability for each call's own math
+# kernels to use multiple cores, there was no real OS-level parallelism
+# left for a Python ThreadPoolExecutor to exploit -- likely GIL
+# contention during PaddleX's inference calls -- so the threading/pool
+# machinery was pure overhead bought for zero benefit. The full saga
+# (a real thread-safety corruption bug, then a real memory leak, then
+# this) is documented in docs/DESIGN_NOTES.md rather than deleted from
+# history, since the dead ends were as informative as the final answer.
 
 
 if __name__ == "__main__":
