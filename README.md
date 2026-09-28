@@ -12,7 +12,6 @@ Government Warning statement, and — when a source PDF supplies the
 label's physical dimensions — runs a certified, CFR-cited check of the
 warning statement's actual type size in millimeters.
 
-**Live demo:** _add your deployed URL here_
 
 ## What it does
 
